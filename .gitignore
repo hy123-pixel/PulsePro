@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+.swiftpm/
+Package.resolved
+Package.swift
+DerivedData/
+
+*.xcuserstate
+*.xccheckout
+
+PulsePro.xcodeproj/xcuserdata/
+PulsePro.xcodeproj/project.xcworkspace/xcuserdata/
