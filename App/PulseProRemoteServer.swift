@@ -7,24 +7,57 @@ import Pulse
 final class PulseProRemoteServer: ObservableObject {
     enum State: String {
         case stopped = "未启动"
-        case listening = "等待设备连接"
+        case listening = "未连接"
         case connecting = "连接中"
         case connected = "已连接"
         case failed = "启动失败"
     }
 
+    struct ConnectedDevice: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let representativeDeviceID: UUID
+        let appNames: [String]
+        let modelName: String?
+        let systemVersionText: String
+        let isActive: Bool
+        let isStreaming: Bool
+
+        var appName: String? {
+            appNames.first
+        }
+    }
+
     @Published private(set) var state: State = .stopped
-    @Published private(set) var connectedDeviceName: String?
-    @Published private(set) var connectedAppName: String?
     @Published private(set) var lastError: String?
     @Published private(set) var recentEvents: [String] = []
     @Published private(set) var serviceName: String = Host.current().localizedName ?? "Pulse Pro"
     @Published private(set) var isStreaming = false
+    @Published private(set) var connectedDevices: [ConnectedDevice] = []
+    @Published private(set) var activeDeviceID: UUID?
+
+    var connectedDeviceName: String? {
+        connectedDevices.first(where: { $0.isActive })?.name
+    }
+
+    var connectedAppName: String? {
+        connectedDevices.first(where: { $0.isActive })?.appName
+    }
+
+    var connectedDeviceModelName: String? {
+        connectedDevices.first(where: { $0.isActive })?.modelName
+    }
+
+    var connectedDeviceSystemVersionText: String? {
+        connectedDevices.first(where: { $0.isActive })?.systemVersionText
+    }
 
     private weak var store: LoggerStore?
     private var listener: NWListener?
-    private var activeConnection: ServerConnection?
-    private var pingTask: DispatchWorkItem?
+    private var connections: [UUID: ServerConnection] = [:]
+    private var connectionToDeviceID: [UUID: UUID] = [:]
+    private var sessions: [UUID: RemoteSession] = [:]
+    private var pingTasks: [UUID: DispatchWorkItem] = [:]
 
     func start(with store: LoggerStore) {
         self.store = store
@@ -68,15 +101,18 @@ final class PulseProRemoteServer: ObservableObject {
     }
 
     func stop() {
-        pingTask?.cancel()
-        pingTask = nil
-        activeConnection?.cancel()
-        activeConnection = nil
+        pingTasks.values.forEach { $0.cancel() }
+        pingTasks.removeAll()
+        connections.values.forEach { $0.cancel() }
+        connections.removeAll()
+        connectionToDeviceID.removeAll()
+        sessions.removeAll()
+        activeDeviceID = nil
+        connectedDevices = []
         isStreaming = false
+        lastError = nil
         listener?.cancel()
         listener = nil
-        connectedDeviceName = nil
-        connectedAppName = nil
         if state != .failed {
             state = .stopped
         }
@@ -86,7 +122,7 @@ final class PulseProRemoteServer: ObservableObject {
     private func handleListenerState(_ newState: NWListener.State) {
         switch newState {
         case .ready:
-            state = activeConnection == nil ? .listening : .connected
+            updateState()
             lastError = nil
             record("监听器已就绪")
         case .failed(let error):
@@ -104,15 +140,9 @@ final class PulseProRemoteServer: ObservableObject {
     }
 
     private func accept(connection: NWConnection) {
-        if activeConnection != nil {
-            record("忽略额外连接请求")
-            connection.cancel()
-            return
-        }
-
-        state = .connecting
         let serverConnection = ServerConnection(connection)
-        activeConnection = serverConnection
+        connections[serverConnection.id] = serverConnection
+        updateState()
         serverConnection.onStateChange = { [weak self] newState in
             Task { @MainActor in
                 self?.handleConnectionState(newState, for: serverConnection)
@@ -135,31 +165,16 @@ final class PulseProRemoteServer: ObservableObject {
     private func handleConnectionState(_ newState: NWConnection.State, for connection: ServerConnection) {
         switch newState {
         case .ready:
-            state = .connecting
+            lastError = nil
+            updateState()
             record("TCP 连接已建立，等待握手")
         case .failed(let error):
-            if activeConnection === connection {
-                pingTask?.cancel()
-                pingTask = nil
-                activeConnection = nil
-                isStreaming = false
-            }
-            state = .listening
             lastError = error.localizedDescription
-            connectedDeviceName = nil
-            connectedAppName = nil
             record("连接失败: \(error.localizedDescription)")
+            removeConnection(connection, shouldCancel: false)
         case .cancelled:
-            if activeConnection === connection {
-                pingTask?.cancel()
-                pingTask = nil
-                activeConnection = nil
-                isStreaming = false
-            }
-            state = listener == nil ? .stopped : .listening
-            connectedDeviceName = nil
-            connectedAppName = nil
             record("连接已关闭")
+            removeConnection(connection, shouldCancel: false)
         default:
             break
         }
@@ -171,20 +186,18 @@ final class PulseProRemoteServer: ObservableObject {
             case .clientHello:
                 record("收到 clientHello")
                 let hello = try JSONDecoder().decode(ClientHello.self, from: packet.body)
-                connectedDeviceName = hello.deviceInfo.name
-                connectedAppName = hello.appInfo.name
+                lastError = nil
+                registerSession(for: connection, hello: hello)
                 connection.send(code: .serverHello, entity: ServerHello(version: "4.0.0"))
                 record("已发送 serverHello")
-                connection.send(code: .resume)
-                isStreaming = true
-                record("已发送 resume，开始实时接收日志")
-                state = .connected
+                applyStreamingState()
                 store?.storeMessage(label: "remote", level: .info, message: "Connected: \(hello.deviceInfo.name) · \(hello.appInfo.name ?? "Unknown App")")
-                schedulePing()
+                schedulePing(for: connection.id)
             case .ping:
                 record("收到客户端 ping")
                 break
             case .storeEventMessageStored:
+                guard isConnectionActive(connection) else { break }
                 record("收到日志事件")
                 let event = try JSONDecoder().decode(LoggerStore.Event.MessageCreated.self, from: packet.body)
                 store?.storeMessage(
@@ -200,6 +213,7 @@ final class PulseProRemoteServer: ObservableObject {
                     line: event.line
                 )
             case .storeEventNetworkTaskCompleted:
+                guard isConnectionActive(connection) else { break }
                 record("收到网络请求完成事件")
                 let event = try PacketNetworkMessage.decode(packet.body)
                 storeCompletedTask(event)
@@ -214,32 +228,237 @@ final class PulseProRemoteServer: ObservableObject {
         }
     }
 
-    private func schedulePing() {
-        pingTask?.cancel()
-        guard let connection = activeConnection else { return }
+    private func schedulePing(for connectionID: UUID) {
+        pingTasks[connectionID]?.cancel()
+        guard let connection = connections[connectionID] else { return }
 
         let task = DispatchWorkItem { [weak self, weak connection] in
             guard let self, let connection else { return }
             connection.send(code: .ping)
             self.record("已发送 ping")
-            self.schedulePing()
+            self.schedulePing(for: connectionID)
         }
-        pingTask = task
+        pingTasks[connectionID] = task
         DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(2), execute: task)
     }
 
     func resumeStreaming() {
-        guard let activeConnection else { return }
-        activeConnection.send(code: .resume)
         isStreaming = true
-        record("已发送 resume")
+        applyStreamingState()
+        record("已恢复当前设备日志接收")
     }
 
     func pauseStreaming() {
-        guard let activeConnection else { return }
-        activeConnection.send(code: .pause)
         isStreaming = false
-        record("已发送 pause")
+        applyStreamingState()
+        record("已暂停所有设备日志接收")
+    }
+
+    func selectDevice(_ deviceID: UUID) {
+        guard sessions[deviceID] != nil else { return }
+        guard activeDeviceID != deviceID else { return }
+        activeDeviceID = deviceID
+        applyStreamingState()
+        updateConnectedDevices()
+        if let session = sessions[deviceID] {
+            record("已切换当前设备到 \(session.deviceName)")
+        }
+    }
+
+    func setAlias(_ alias: String?, forGroupKey groupKey: String) {
+        let key = aliasStorageKey(forGroupKey: groupKey)
+        let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(trimmed, forKey: key)
+        }
+        updateConnectedDevices()
+    }
+
+    private func registerSession(for connection: ServerConnection, hello: ClientHello) {
+        if let existing = sessions[hello.deviceId], existing.connectionID != connection.id {
+            connections[existing.connectionID]?.cancel()
+            removeConnection(id: existing.connectionID, shouldCancel: false)
+        }
+
+        connectionToDeviceID[connection.id] = hello.deviceId
+        sessions[hello.deviceId] = RemoteSession(
+            deviceID: hello.deviceId,
+            connectionID: connection.id,
+            deviceName: hello.deviceInfo.name,
+            appName: hello.appInfo.name,
+            modelName: firstNonEmptyString([
+                hello.deviceInfo.localizedModel,
+                hello.deviceInfo.model
+            ]),
+            systemVersionText: "\(hello.deviceInfo.systemName) \(hello.deviceInfo.systemVersion)"
+        )
+
+        if activeDeviceID == nil {
+            activeDeviceID = hello.deviceId
+        }
+
+        isStreaming = true
+
+        updateConnectedDevices()
+        updateState()
+    }
+
+    private func applyStreamingState() {
+        for (deviceID, session) in sessions {
+            guard let connection = connections[session.connectionID] else { continue }
+            if isStreaming && activeDeviceID == deviceID {
+                connection.send(code: .resume)
+            } else {
+                connection.send(code: .pause)
+            }
+        }
+        updateConnectedDevices()
+        updateState()
+    }
+
+    private func isConnectionActive(_ connection: ServerConnection) -> Bool {
+        guard let deviceID = connectionToDeviceID[connection.id] else { return false }
+        return activeDeviceID == deviceID && isStreaming
+    }
+
+    private func removeConnection(_ connection: ServerConnection, shouldCancel: Bool) {
+        removeConnection(id: connection.id, shouldCancel: shouldCancel)
+    }
+
+    private func removeConnection(id connectionID: UUID, shouldCancel: Bool) {
+        pingTasks[connectionID]?.cancel()
+        pingTasks.removeValue(forKey: connectionID)
+
+        if shouldCancel {
+            connections[connectionID]?.cancel()
+        }
+        connections.removeValue(forKey: connectionID)
+
+        let removedDeviceID = connectionToDeviceID.removeValue(forKey: connectionID)
+        if let removedDeviceID {
+            sessions.removeValue(forKey: removedDeviceID)
+            if activeDeviceID == removedDeviceID {
+                activeDeviceID = sessions.keys.sorted { lhs, rhs in
+                    (sessions[lhs]?.deviceName ?? "") < (sessions[rhs]?.deviceName ?? "")
+                }.first
+            }
+        }
+
+        updateConnectedDevices()
+        updateState()
+        if sessions.isEmpty {
+            isStreaming = false
+        } else {
+            applyStreamingState()
+        }
+    }
+
+    private func updateConnectedDevices() {
+        let grouped = Dictionary(grouping: sessions.values, by: physicalGroupKey(for:))
+        connectedDevices = grouped
+            .map { groupKey, sessions in
+                let sortedSessions = sessions.sorted {
+                    ($0.appName ?? "") < ($1.appName ?? "")
+                }
+                let representative = sortedSessions.first(where: { $0.deviceID == activeDeviceID }) ?? sortedSessions[0]
+                let isActive = sessions.contains(where: { $0.deviceID == activeDeviceID })
+
+                return ConnectedDevice(
+                    id: groupKey,
+                    name: preferredDisplayName(for: representative, groupKey: groupKey),
+                    representativeDeviceID: representative.deviceID,
+                    appNames: Array(Set(sortedSessions.compactMap(\.appName))).sorted(),
+                    modelName: representative.modelName,
+                    systemVersionText: representative.systemVersionText,
+                    isActive: isActive,
+                    isStreaming: isStreaming && isActive
+                )
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private func updateState() {
+        if listener == nil {
+            if state != .failed {
+                state = .stopped
+            }
+            return
+        }
+        if !sessions.isEmpty {
+            state = .connected
+            lastError = nil
+        } else if !connections.isEmpty {
+            state = .connecting
+        } else {
+            state = .listening
+            lastError = nil
+        }
+    }
+
+    private func preferredDisplayName(for session: RemoteSession, groupKey: String) -> String {
+        if let alias = storedAlias(forGroupKey: groupKey) {
+            return alias
+        }
+
+        let rawName = session.deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericNames = ["iphone", "ipad", "ipod touch", "apple tv", "watch", "iwatch"]
+        let normalized = rawName.lowercased()
+
+        if !rawName.isEmpty, !genericNames.contains(normalized) {
+            return rawName
+        }
+
+        let base = [session.modelName, rawName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty && !genericNames.contains($0.lowercased()) })
+            ?? (rawName.isEmpty ? "设备" : rawName)
+        return base
+    }
+
+    private func storedAlias(forGroupKey groupKey: String) -> String? {
+        let alias = UserDefaults.standard.string(forKey: aliasStorageKey(forGroupKey: groupKey))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return alias?.isEmpty == false ? alias : nil
+    }
+
+    private func aliasStorageKey(forGroupKey groupKey: String) -> String {
+        "remoteDeviceAlias.\(groupKey)"
+    }
+
+    private func physicalGroupKey(for session: RemoteSession) -> String {
+        let name = session.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let system = session.systemVersionText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let genericNames = ["iphone", "ipad", "ipod touch", "apple tv", "watch", "iwatch"]
+
+        if !name.isEmpty, !genericNames.contains(name) {
+            return "name:\(name)|system:\(system)"
+        }
+
+        return "family:\(deviceFamilyKey(for: session))|system:\(system)"
+    }
+
+    private func deviceFamilyKey(for session: RemoteSession) -> String {
+        let candidates = [session.modelName, session.deviceName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        for value in candidates {
+            if value.contains("iphone") { return "iphone" }
+            if value.contains("ipad") { return "ipad" }
+            if value.contains("watch") { return "watch" }
+            if value.contains("apple tv") || value.contains("appletv") { return "appletv" }
+            if !value.isEmpty {
+                return value
+            }
+        }
+
+        return "unknown"
+    }
+
+    private func firstNonEmptyString(_ values: [String?]) -> String? {
+        values
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
     }
 
     private func storeCompletedTask(_ event: LoggerStore.Event.NetworkTaskCompleted) {
@@ -437,6 +656,15 @@ private func encodeHeaders(_ headers: [String: String]?) -> String {
         .joined(separator: "\n")
 }
 
+private struct RemoteSession {
+    let deviceID: UUID
+    let connectionID: UUID
+    let deviceName: String
+    let appName: String?
+    let modelName: String?
+    let systemVersionText: String
+}
+
 private final class ServerConnection {
     struct Packet {
         let code: PacketCode
@@ -459,6 +687,8 @@ private final class ServerConnection {
     var onStateChange: ((NWConnection.State) -> Void)?
     var onPacket: ((Packet) -> Void)?
     var onError: ((String) -> Void)?
+
+    let id = UUID()
 
     private let connection: NWConnection
     private var buffer = Data()

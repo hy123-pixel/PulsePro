@@ -180,6 +180,14 @@ final class PulseProStoreController: ObservableObject {
         remoteServer.pauseStreaming()
     }
 
+    func selectRemoteDevice(_ deviceID: UUID) {
+        remoteServer.selectDevice(deviceID)
+    }
+
+    func renameRemoteDevice(groupKey: String, alias: String?) {
+        remoteServer.setAlias(alias, forGroupKey: groupKey)
+    }
+
     private func openDefaultStore() async {
         releaseScopedURL()
         do {

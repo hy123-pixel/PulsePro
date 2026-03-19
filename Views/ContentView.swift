@@ -54,7 +54,8 @@ struct ContentView: View {
                 } label: {
                     RemoteStatusLabel(
                         state: controller.remoteServer.state,
-                        isStreaming: controller.remoteServer.isStreaming
+                        isStreaming: controller.remoteServer.isStreaming,
+                        connectedCount: controller.remoteServer.connectedDevices.count
                     )
                 }
                 .buttonStyle(.bordered)
@@ -163,6 +164,7 @@ struct SidebarRow: View {
 struct RemoteStatusLabel: View {
     let state: PulseProRemoteServer.State
     let isStreaming: Bool
+    let connectedCount: Int
 
     var body: some View {
         HStack(spacing: 8) {
@@ -191,11 +193,14 @@ struct RemoteStatusLabel: View {
     private var labelText: String {
         switch state {
         case .connected:
+            if connectedCount > 1 {
+                return isStreaming ? "已连接（\(connectedCount) 台）" : "已连接（\(connectedCount) 台，已暂停）"
+            }
             return isStreaming ? "已连接" : "已连接（已暂停）"
         case .connecting:
             return "连接中"
         case .listening:
-            return "等待连接"
+            return "未连接"
         case .failed:
             return "连接异常"
         case .stopped:
@@ -206,6 +211,8 @@ struct RemoteStatusLabel: View {
 
 struct RemoteStatusPopover: View {
     @ObservedObject var controller: PulseProStoreController
+    @State private var editingDeviceID: String?
+    @State private var editingAlias = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -215,7 +222,8 @@ struct RemoteStatusPopover: View {
                 Spacer()
                 RemoteStatusLabel(
                     state: controller.remoteServer.state,
-                    isStreaming: controller.remoteServer.isStreaming
+                    isStreaming: controller.remoteServer.isStreaming,
+                    connectedCount: controller.remoteServer.connectedDevices.count
                 )
             }
 
@@ -223,11 +231,100 @@ struct RemoteStatusPopover: View {
                 RemoteInfoRow(label: "服务名", value: controller.remoteServer.serviceName)
                 RemoteInfoRow(label: "状态", value: controller.remoteServer.state.rawValue)
                 RemoteInfoRow(label: "日志接收", value: controller.remoteServer.isStreaming ? "进行中" : "已暂停")
+                RemoteInfoRow(label: "设备数", value: "\(controller.remoteServer.connectedDevices.count)")
                 if let name = controller.remoteServer.connectedDeviceName {
                     RemoteInfoRow(label: "设备", value: name)
                 }
+                if let modelName = controller.remoteServer.connectedDeviceModelName {
+                    RemoteInfoRow(label: "设备型号", value: modelName)
+                }
+                if let systemVersionText = controller.remoteServer.connectedDeviceSystemVersionText {
+                    RemoteInfoRow(label: "系统版本", value: systemVersionText)
+                }
                 if let appName = controller.remoteServer.connectedAppName {
                     RemoteInfoRow(label: "来源应用", value: appName)
+                }
+            }
+
+            if !controller.remoteServer.connectedDevices.isEmpty {
+                Divider()
+                Text("已连接设备")
+                    .font(.subheadline.weight(.semibold))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(controller.remoteServer.connectedDevices) { device in
+                        HStack(alignment: .center, spacing: 10) {
+                            Circle()
+                                .fill(device.isActive ? Color.accentColor : .secondary.opacity(0.5))
+                                .frame(width: 8, height: 8)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(device.name)
+                                        .font(.subheadline.weight(.medium))
+                                    if device.isActive {
+                                        Text(device.isStreaming ? "当前设备" : "当前设备（已暂停）")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                if let modelName = device.modelName {
+                                    Text("\(modelName) · \(device.systemVersionText)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text(device.systemVersionText)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if !device.appNames.isEmpty {
+                                    Text(device.appNames.joined(separator: " · "))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                if editingDeviceID == device.id {
+                                    HStack(spacing: 6) {
+                                        TextField("设备别名", text: $editingAlias)
+                                            .textFieldStyle(.roundedBorder)
+                                        Button("保存") {
+                                            controller.renameRemoteDevice(groupKey: device.id, alias: editingAlias)
+                                            editingDeviceID = nil
+                                            editingAlias = ""
+                                        }
+                                        .controlSize(.small)
+                                        Button("取消") {
+                                            editingDeviceID = nil
+                                            editingAlias = ""
+                                        }
+                                        .controlSize(.small)
+                                    }
+                                }
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 6) {
+                                if !device.isActive {
+                                    Button("切换到此设备") {
+                                        controller.selectRemoteDevice(device.representativeDeviceID)
+                                    }
+                                    .controlSize(.small)
+                                }
+
+                                Button(editingDeviceID == device.id ? "编辑中" : "重命名") {
+                                    editingDeviceID = device.id
+                                    editingAlias = device.name
+                                }
+                                .controlSize(.small)
+                                .disabled(editingDeviceID != nil && editingDeviceID != device.id)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(device.isActive ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
                 }
             }
 
@@ -248,7 +345,7 @@ struct RemoteStatusPopover: View {
                         controller.startReceivingRemoteEvents()
                     }
                 }
-                .disabled(controller.remoteServer.state != .connected)
+                .disabled(controller.remoteServer.state != .connected || controller.remoteServer.activeDeviceID == nil)
 
                 Button("清空日志", role: .destructive) {
                     controller.clearWritableStore()
