@@ -7,9 +7,86 @@ import SwiftUI
 import Pulse
 import CoreData
 
+private let codeEditorFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+private let codeEditorLineHeight: CGFloat = 16
+private let codeEditorTextInset: CGFloat = 12
+private let codeEditorApproxCharWidth: CGFloat = 7.2
+private let inspectorPageBackground = Color(nsColor: .windowBackgroundColor)
+private let inspectorCardBackground = Color(nsColor: .textBackgroundColor)
+private let inspectorMutedBackground = Color(nsColor: .underPageBackgroundColor)
+private let inspectorBorderColor = Color(nsColor: .separatorColor).opacity(0.35)
+private let inspectorChromeBackground = Color(nsColor: .controlBackgroundColor)
+private let inspectorTabBarBackground = Color.clear
+private let inspectorGutterBackground = Color(nsColor: .underPageBackgroundColor)
+
+private let localizedHTTPStatusDescriptions: [Int: String] = [
+    100: "继续",
+    101: "切换协议",
+    102: "处理中",
+    103: "提前提示",
+    200: "成功",
+    201: "已创建",
+    202: "已接受",
+    203: "非权威信息",
+    204: "无内容",
+    205: "重置内容",
+    206: "部分内容",
+    207: "多状态",
+    208: "已报告",
+    226: "IM 已使用",
+    300: "多种选择",
+    301: "永久重定向",
+    302: "临时重定向",
+    303: "查看其他位置",
+    304: "未修改",
+    305: "使用代理",
+    307: "临时重定向",
+    308: "永久重定向",
+    400: "错误请求",
+    401: "未授权",
+    402: "需要付款",
+    403: "禁止访问",
+    404: "未找到",
+    405: "方法不允许",
+    406: "不可接受",
+    407: "需要代理认证",
+    408: "请求超时",
+    409: "资源冲突",
+    410: "资源已删除",
+    411: "需要内容长度",
+    412: "前置条件失败",
+    413: "请求体过大",
+    414: "请求地址过长",
+    415: "不支持的媒体类型",
+    416: "请求范围不满足",
+    417: "预期失败",
+    421: "请求被误导",
+    422: "无法处理的实体",
+    423: "资源已锁定",
+    424: "依赖失败",
+    425: "请求过早",
+    426: "需要升级协议",
+    428: "需要前置条件",
+    429: "请求过多",
+    431: "请求头字段过大",
+    451: "因法律原因不可用",
+    500: "服务器内部错误",
+    501: "尚未实现",
+    502: "网关错误",
+    503: "服务不可用",
+    504: "网关超时",
+    505: "HTTP 版本不受支持",
+    506: "协商变体异常",
+    507: "存储空间不足",
+    508: "检测到循环",
+    510: "未扩展",
+    511: "需要网络认证"
+]
+
 struct NetworkListView: View {
     @EnvironmentObject private var controller: PulseProStoreController
     let store: LoggerStore
+    @AppStorage("networkSplitRatio") private var splitRatio = 0.5
     @State private var searchText = ""
     @State private var filterStatus: NetworkStatusFilter = .all
     @State private var filterMethod: String = "全部"
@@ -17,31 +94,45 @@ struct NetworkListView: View {
     @State private var selectedTaskID: NSManagedObjectID?
 
     var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                NetworkBoardHeader(
-                    totalCount: tasks.count,
-                    searchText: $searchText,
-                    filterStatus: $filterStatus,
-                    filterMethod: $filterMethod,
-                    clearLogs: controller.clearWritableStore
-                )
-                Divider()
-                NetworkTaskTable(tasks: filteredTasks, selectedTaskID: $selectedTaskID)
-            }
-            .frame(minWidth: 400)
+        GeometryReader { proxy in
+            let dividerWidth: CGFloat = 10
+            let minPanelWidth: CGFloat = 320
+            let availableWidth = max(proxy.size.width - dividerWidth, minPanelWidth * 2)
+            let clampedRatio = min(max(splitRatio, Double(minPanelWidth / max(availableWidth, 1))), Double(1 - (minPanelWidth / max(availableWidth, 1))))
+            let leftWidth = max(CGFloat(clampedRatio) * availableWidth, minPanelWidth)
+            let rightWidth = max(availableWidth - leftWidth, minPanelWidth)
 
-            NetworkInspectorPanel(task: selectedTask)
-                .frame(minWidth: 300, idealWidth: 400)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onChange(of: selectedTaskID) { objectID in
-            selectedTask = filteredTasks.first(where: { $0.objectID == objectID })
-        }
-        .onChange(of: filteredTasks.map(\.objectID)) { ids in
-            if let current = selectedTaskID, !ids.contains(current) {
-                selectedTaskID = nil
-                selectedTask = nil
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    NetworkBoardHeader(
+                        totalCount: tasks.count,
+                        searchText: $searchText,
+                        filterStatus: $filterStatus,
+                        filterMethod: $filterMethod,
+                        clearLogs: controller.clearWritableStore
+                    )
+                    Divider()
+                    NetworkTaskTable(tasks: filteredTasks, selectedTaskID: $selectedTaskID)
+                }
+                .frame(width: leftWidth)
+
+                SplitDividerHandle(splitRatio: $splitRatio, totalWidth: availableWidth, minPanelWidth: minPanelWidth)
+                    .frame(width: dividerWidth)
+
+                NetworkInspectorPanel(task: selectedTask)
+                    .frame(width: rightWidth)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .coordinateSpace(name: "network-split-space")
+            .onChange(of: selectedTaskID) { objectID in
+                selectedTask = filteredTasks.first(where: { $0.objectID == objectID })
+            }
+            .onChange(of: filteredTasks.map(\.objectID)) { ids in
+                if let current = selectedTaskID, !ids.contains(current) {
+                    selectedTaskID = nil
+                    selectedTask = nil
+                }
             }
         }
     }
@@ -110,7 +201,6 @@ private struct NetworkBoardHeader: View {
     @Binding var filterStatus: NetworkStatusFilter
     @Binding var filterMethod: String
     let clearLogs: () -> Void
-
     private let methods = ["全部", "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
 
     var body: some View {
@@ -179,52 +269,52 @@ private struct NetworkTaskTable: View {
             }
             .width(30)
 
-            TableColumn("Code") { task in
+            TableColumn("状态码") { task in
                 Text("\(task.statusCode)")
                     .foregroundStyle(statusColor(for: task))
                     .font(.system(.body, design: .monospaced).weight(.semibold))
             }
             .width(58)
 
-            TableColumn("Method") { task in
+            TableColumn("方法") { task in
                 Text(task.httpMethod ?? "-")
                     .font(.system(.body, design: .monospaced).weight(.semibold))
             }
             .width(76)
 
-            TableColumn("Path") { task in
+            TableColumn("路径") { task in
                 Text(taskPath(task))
                     .lineLimit(1)
             }
             .width(min: 220, ideal: 340)
 
-            TableColumn("Host") { task in
+            TableColumn("主机") { task in
                 Text(task.host ?? host(from: task.url))
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
             }
             .width(min: 160, ideal: 220)
 
-            TableColumn("Time") { task in
+            TableColumn("时间") { task in
                 Text(Self.timeFormatter.string(from: task.createdAt))
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
             .width(110)
 
-            TableColumn("Duration") { task in
+            TableColumn("耗时") { task in
                 Text(durationText(for: task))
                     .font(.system(.body, design: .monospaced))
             }
             .width(90)
 
-            TableColumn("Request") { task in
+            TableColumn("请求") { task in
                 Text(byteText(task.requestBodySize))
                     .font(.system(.body, design: .monospaced))
             }
             .width(90)
 
-            TableColumn("Response Size") { task in
+            TableColumn("响应大小") { task in
                 Text(responseSizeText(for: task))
                     .font(.system(.body, design: .monospaced))
             }
@@ -323,7 +413,7 @@ private struct NetworkInspectorPanel: View {
                     .padding(16)
                 }
             }
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(inspectorPageBackground)
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "rectangle.rightthird.inset.filled")
@@ -331,26 +421,26 @@ private struct NetworkInspectorPanel: View {
                     .foregroundStyle(.secondary)
                 Text("选择一条请求查看完整检查器")
                     .font(.headline)
-                Text("右侧会显示 Info、Request、Response、Query、Headers、Cookies、Timing 和 cURL。")
+                Text("右侧会显示概览、请求、响应、查询参数、请求头、Cookie、时序和 cURL。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .underPageBackgroundColor))
+            .background(inspectorPageBackground)
         }
     }
 }
 
 private enum InspectorTab: String, CaseIterable, Identifiable {
-    case info = "Info"
-    case request = "Request"
-    case response = "Response"
-    case query = "Query"
-    case headers = "Headers"
-    case cookies = "Cookies"
-    case timing = "Timing"
+    case info = "概览"
+    case request = "请求"
+    case response = "响应"
+    case query = "查询参数"
+    case headers = "请求头"
+    case cookies = "Cookie"
+    case timing = "时序"
     case curl = "cURL"
 
     var id: String { rawValue }
@@ -392,22 +482,22 @@ private struct InspectorInfoView: View {
                 statusSummary
                 transferSummary
 
-                InspectorSection("Information") {
+                InspectorSection("基本信息") {
                     InspectorGrid(rows: [
-                        ("Task", task.type?.urlSessionTaskClassName ?? "-"),
-                        ("Date", dateText(task.createdAt)),
-                        ("Duration", durationText(task.duration)),
-                        ("Cache Policy", cachePolicyText(task.currentRequest?.cachePolicy ?? task.originalRequest?.cachePolicy)),
-                        ("Timeout Interval", timeoutText(task.currentRequest?.timeoutInterval ?? task.originalRequest?.timeoutInterval)),
-                        ("Scheme", URL(string: task.url ?? "")?.scheme ?? "-"),
-                        ("Host", task.host ?? "-"),
-                        ("Path", taskPath(task)),
-                        ("Method", resolvedMethod(task))
+                        ("任务类型", task.type?.urlSessionTaskClassName ?? "-"),
+                        ("时间", dateText(task.createdAt)),
+                        ("耗时", durationText(task.duration)),
+                        ("缓存策略", cachePolicyText(task.currentRequest?.cachePolicy ?? task.originalRequest?.cachePolicy)),
+                        ("超时时间", timeoutText(task.currentRequest?.timeoutInterval ?? task.originalRequest?.timeoutInterval)),
+                        ("协议", URL(string: task.url ?? "")?.scheme ?? "-"),
+                        ("主机", task.host ?? "-"),
+                        ("路径", taskPath(task)),
+                        ("请求方法", resolvedMethod(task))
                     ])
                 }
 
                 if let error = task.errorDebugDescription, !error.isEmpty {
-                    InspectorSection("Error") {
+                    InspectorSection("错误信息") {
                         Text(error)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -443,14 +533,18 @@ private struct InspectorInfoView: View {
                 .textSelection(.enabled)
         }
         .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(inspectorCardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(inspectorBorderColor, lineWidth: 1)
+        )
     }
 
     private var transferSummary: some View {
         HStack(spacing: 0) {
             TransferCard(
-                title: "Sent",
+                title: "发送",
                 symbol: "arrow.up.circle",
                 total: task.totalTransferSize.requestHeaderBytesSent + task.totalTransferSize.requestBodyBytesSent,
                 headerBytes: task.totalTransferSize.requestHeaderBytesSent,
@@ -460,7 +554,7 @@ private struct InspectorInfoView: View {
             Divider().padding(.vertical, 10)
 
             TransferCard(
-                title: "Received",
+                title: "接收",
                 symbol: "arrow.down.circle",
                 total: task.totalTransferSize.responseHeaderBytesReceived + task.totalTransferSize.responseBodyBytesReceived,
                 headerBytes: task.totalTransferSize.responseHeaderBytesReceived,
@@ -468,12 +562,16 @@ private struct InspectorInfoView: View {
             )
         }
         .padding(8)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(inspectorCardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(inspectorBorderColor, lineWidth: 1)
+        )
     }
 
     private var networkLoadSummary: some View {
-        InspectorSection("Network Load") {
+        InspectorSection("网络传输") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     Label(bytes(task.totalTransferSize.requestHeaderBytesSent + task.totalTransferSize.requestBodyBytesSent), systemImage: "arrow.up.circle")
@@ -491,16 +589,16 @@ private struct InspectorInfoView: View {
     private var statusText: String {
         let code = Int(task.statusCode)
         if code > 0 {
-            return "\(code) \(HTTPURLResponse.localizedString(forStatusCode: code).uppercased())"
+            return "\(code) \(localizedHTTPStatusText(for: code))"
         }
         return stateText(task.state)
     }
 
     private func stateText(_ state: NetworkTaskEntity.State) -> String {
         switch state {
-        case .pending: return "Pending"
-        case .success: return "Success"
-        case .failure: return "Failure"
+        case .pending: return "等待中"
+        case .success: return "成功"
+        case .failure: return "失败"
         }
     }
 }
@@ -524,9 +622,9 @@ private struct TransferCard: View {
                         .font(.system(size: 18, weight: .bold))
                 }
             }
-            Text("Headers: \(bytes(headerBytes))")
+            Text("请求头：\(bytes(headerBytes))")
                 .foregroundStyle(.secondary)
-            Text("Body: \(bytes(bodyBytes))")
+            Text("请求体：\(bytes(bodyBytes))")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -548,25 +646,37 @@ private struct InspectorTimingAnalysisView: View {
             }
 
             if let transaction = task.orderedTransactions.first {
-                phaseSection(title: "Scheduling", phases: schedulingPhases(transaction))
-                phaseSection(title: "Connection", phases: connectionPhases(transaction))
-                phaseSection(title: "Response", phases: responsePhases(transaction))
+                phaseSection(title: "调度", phases: schedulingPhases(transaction))
+                phaseSection(title: "连接", phases: connectionPhases(transaction))
+                phaseSection(title: "响应", phases: responsePhases(transaction))
             } else {
-                Text("No timing metrics")
+                Text("暂无时序数据")
                     .foregroundStyle(.secondary)
             }
         }
         .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(inspectorCardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(inspectorBorderColor, lineWidth: 1)
+        )
     }
 
     private var statusText: String {
         let code = Int(task.statusCode)
         if code > 0 {
-            return "\(code) \(HTTPURLResponse.localizedString(forStatusCode: code).uppercased())"
+            return "\(code) \(localizedHTTPStatusText(for: code))"
         }
-        return "\(task.state)"
+        return stateText(task.state)
+    }
+
+    private func stateText(_ state: NetworkTaskEntity.State) -> String {
+        switch state {
+        case .pending: return "等待中"
+        case .success: return "成功"
+        case .failure: return "失败"
+        }
     }
 
     private func phaseSection(title: String, phases: [TimingPhase]) -> some View {
@@ -581,23 +691,23 @@ private struct InspectorTimingAnalysisView: View {
 
     private func schedulingPhases(_ t: NetworkTransactionMetricsEntity) -> [TimingPhase] {
         [
-            makePhase("Queued", start: t.fetchStartDate, end: t.domainLookupStartDate ?? t.connectStartDate ?? t.requestStartDate, color: .gray)
+            makePhase("排队", start: t.fetchStartDate, end: t.domainLookupStartDate ?? t.connectStartDate ?? t.requestStartDate, color: .gray)
         ].compactMap { $0 }
     }
 
     private func connectionPhases(_ t: NetworkTransactionMetricsEntity) -> [TimingPhase] {
         [
-            makePhase("DNS", start: t.domainLookupStartDate, end: t.domainLookupEndDate, color: .purple),
-            makePhase("TCP", start: t.connectStartDate, end: t.connectEndDate, color: .yellow),
-            makePhase("Secure", start: t.secureConnectionStartDate, end: t.secureConnectionEndDate, color: .red)
+            makePhase("DNS 解析", start: t.domainLookupStartDate, end: t.domainLookupEndDate, color: .purple),
+            makePhase("TCP 连接", start: t.connectStartDate, end: t.connectEndDate, color: .yellow),
+            makePhase("TLS 握手", start: t.secureConnectionStartDate, end: t.secureConnectionEndDate, color: .red)
         ].compactMap { $0 }
     }
 
     private func responsePhases(_ t: NetworkTransactionMetricsEntity) -> [TimingPhase] {
         [
-            makePhase("Request", start: t.requestStartDate, end: t.requestEndDate, color: .green),
-            makePhase("Waiting", start: t.requestEndDate, end: t.responseStartDate, color: .gray),
-            makePhase("Download", start: t.responseStartDate, end: t.responseEndDate, color: .blue)
+            makePhase("发送请求", start: t.requestStartDate, end: t.requestEndDate, color: .green),
+            makePhase("等待响应", start: t.requestEndDate, end: t.responseStartDate, color: .gray),
+            makePhase("下载响应", start: t.responseStartDate, end: t.responseEndDate, color: .blue)
         ].compactMap { $0 }
     }
 
@@ -647,38 +757,38 @@ private struct InspectorRequestView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            InspectorSection("Line") {
+            InspectorSection("请求行") {
                 InspectorGrid(rows: [
                     ("URL", request?.url ?? fallbackURL ?? "-"),
-                    ("Method", resolvedMethod(task, request: request)),
-                    ("Cache Policy", cachePolicyText(request?.cachePolicy)),
-                    ("Timeout", timeoutText(request?.timeoutInterval))
+                    ("请求方法", resolvedMethod(task, request: request)),
+                    ("缓存策略", cachePolicyText(request?.cachePolicy)),
+                    ("超时时间", timeoutText(request?.timeoutInterval))
                 ])
             }
 
             if let request {
-                InspectorSection("Options") {
+                InspectorSection("请求选项") {
                     InspectorGrid(rows: [
-                        ("Allows Cellular", yesNo(request.allowsCellularAccess)),
-                        ("Allows Expensive", yesNo(request.allowsExpensiveNetworkAccess)),
-                        ("Allows Constrained", yesNo(request.allowsConstrainedNetworkAccess)),
-                        ("Handle Cookies", yesNo(request.httpShouldHandleCookies)),
-                        ("Use Pipelining", yesNo(request.httpShouldUsePipelining))
+                        ("允许蜂窝网络", yesNo(request.allowsCellularAccess)),
+                        ("允许高成本网络", yesNo(request.allowsExpensiveNetworkAccess)),
+                        ("允许受限网络", yesNo(request.allowsConstrainedNetworkAccess)),
+                        ("自动处理 Cookie", yesNo(request.httpShouldHandleCookies)),
+                        ("启用管线化", yesNo(request.httpShouldUsePipelining))
                     ])
                 }
 
-                InspectorSection("Headers") {
+                InspectorSection("请求头") {
                     HeaderListView(headers: request.headers)
                 }
 
-                InspectorSection("Body") {
+                InspectorSection("请求体") {
                     RequestBodyPreview(task: task)
                 }
             }
         }
     }
 
-    private func yesNo(_ value: Bool) -> String { value ? "Yes" : "No" }
+    private func yesNo(_ value: Bool) -> String { value ? "是" : "否" }
     private func timeoutText(_ value: Int32?) -> String { value.map { "\($0)s" } ?? "-" }
     private func cachePolicyText(_ value: URLRequest.CachePolicy?) -> String { value.map(String.init(describing:)) ?? "-" }
 }
@@ -688,21 +798,21 @@ private struct InspectorResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            InspectorSection("Status") {
+            InspectorSection("状态") {
                 InspectorGrid(rows: [
-                    ("Code", "\(task.statusCode)"),
-                    ("MIME", task.responseContentType ?? "-"),
-                    ("Stored Size", bytes(task.responseBodySize))
+                    ("状态码", "\(task.statusCode)"),
+                    ("响应类型", task.responseContentType ?? "-"),
+                    ("存储大小", bytes(task.responseBodySize))
                 ])
             }
 
             if let response = task.response {
-                InspectorSection("Headers") {
+                InspectorSection("响应头") {
                     HeaderListView(headers: response.headers)
                 }
             }
 
-            InspectorSection("Body") {
+            InspectorSection("响应体") {
                 ResponseBodyPreview(task: task)
             }
         }
@@ -714,9 +824,9 @@ private struct InspectorQueryView: View {
 
     var body: some View {
         let items = queryItems(from: urlString)
-        return InspectorSection("Query Items") {
+        return InspectorSection("查询参数") {
             if items.isEmpty {
-                Text("No query items")
+                Text("暂无查询参数")
                     .foregroundStyle(.secondary)
             } else {
                 InspectorGrid(rows: items.map { ($0.name, $0.value ?? "") })
@@ -735,17 +845,17 @@ private struct InspectorHeadersView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            InspectorSection("Original Request Headers") {
+            InspectorSection("原始请求头") {
                 HeaderListView(headers: task.originalRequest?.headers ?? [:])
             }
 
             if let current = task.currentRequest, current !== task.originalRequest {
-                InspectorSection("Current Request Headers") {
+                InspectorSection("当前请求头") {
                     HeaderListView(headers: current.headers)
                 }
             }
 
-            InspectorSection("Response Headers") {
+            InspectorSection("响应头") {
                 HeaderListView(headers: task.response?.headers ?? [:])
             }
         }
@@ -757,10 +867,10 @@ private struct InspectorCookiesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            InspectorSection("Request Cookies") {
+            InspectorSection("请求 Cookie") {
                 CookieListView(rawCookie: task.originalRequest?.headers["Cookie"])
             }
-            InspectorSection("Response Cookies") {
+            InspectorSection("响应 Cookie") {
                 CookieListView(rawCookie: task.response?.headers["Set-Cookie"])
             }
         }
@@ -773,29 +883,29 @@ private struct InspectorTimingView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if task.orderedTransactions.isEmpty {
-                InspectorSection("Timing") {
-                    Text("No timing metrics")
+                InspectorSection("时序") {
+                    Text("暂无时序数据")
                         .foregroundStyle(.secondary)
                 }
             } else {
                 ForEach(task.orderedTransactions, id: \.objectID) { transaction in
-                    InspectorSection("Transaction \(transaction.index + 1)") {
+                    InspectorSection("事务 \(transaction.index + 1)") {
                         InspectorGrid(rows: [
-                            ("Fetch Type", String(describing: transaction.fetchType)),
-                            ("Protocol", transaction.networkProtocol ?? "-"),
-                            ("Local Address", transaction.localAddress ?? "-"),
-                            ("Remote Address", transaction.remoteAddress ?? "-"),
-                            ("Proxy", transaction.isProxyConnection ? "Yes" : "No"),
-                            ("Reused", transaction.isReusedConnection ? "Yes" : "No"),
-                            ("Cellular", transaction.isCellular ? "Yes" : "No"),
-                            ("Expensive", transaction.isExpensive ? "Yes" : "No"),
-                            ("Constrained", transaction.isConstrained ? "Yes" : "No"),
-                            ("Connect Start", dateText(transaction.connectStartDate)),
-                            ("Connect End", dateText(transaction.connectEndDate)),
-                            ("Request Start", dateText(transaction.requestStartDate)),
-                            ("Request End", dateText(transaction.requestEndDate)),
-                            ("Response Start", dateText(transaction.responseStartDate)),
-                            ("Response End", dateText(transaction.responseEndDate))
+                            ("加载类型", String(describing: transaction.fetchType)),
+                            ("协议", transaction.networkProtocol ?? "-"),
+                            ("本地地址", transaction.localAddress ?? "-"),
+                            ("远端地址", transaction.remoteAddress ?? "-"),
+                            ("是否代理", transaction.isProxyConnection ? "是" : "否"),
+                            ("是否复用连接", transaction.isReusedConnection ? "是" : "否"),
+                            ("是否蜂窝网络", transaction.isCellular ? "是" : "否"),
+                            ("是否高成本网络", transaction.isExpensive ? "是" : "否"),
+                            ("是否受限网络", transaction.isConstrained ? "是" : "否"),
+                            ("开始连接", dateText(transaction.connectStartDate)),
+                            ("连接结束", dateText(transaction.connectEndDate)),
+                            ("开始请求", dateText(transaction.requestStartDate)),
+                            ("请求结束", dateText(transaction.requestEndDate)),
+                            ("开始响应", dateText(transaction.responseStartDate)),
+                            ("响应结束", dateText(transaction.responseEndDate))
                         ])
                     }
                 }
@@ -840,22 +950,98 @@ private struct InspectorCurlView: View {
 
 private struct InspectorSection<Content: View>: View {
     let title: String
+    let isCollapsible: Bool
     @ViewBuilder let content: Content
+    @State private var isExpanded = true
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(_ title: String, isCollapsible: Bool = true, @ViewBuilder content: () -> Content) {
         self.title = title
+        self.isCollapsible = isCollapsible
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline)
-            content
+            header
+            if !isCollapsible || isExpanded {
+                content
+            }
         }
         .padding(14)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(inspectorCardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(inspectorBorderColor, lineWidth: 1)
+        )
+    }
+
+    private var header: some View {
+        Button {
+            guard isCollapsible else { return }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 8) {
+                if isCollapsible {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Text(title)
+                    .font(.headline)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SplitDividerHandle: View {
+    @Binding var splitRatio: Double
+    let totalWidth: CGFloat
+    let minPanelWidth: CGFloat
+    @State private var isHovering = false
+
+    var body: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+
+            Rectangle()
+                .fill(Color.secondary.opacity(0.18))
+                .frame(width: 1)
+
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.secondary.opacity(0.14))
+                .frame(width: 6, height: 42)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering && !isHovering {
+                NSCursor.resizeLeftRight.push()
+                isHovering = true
+            } else if !hovering && isHovering {
+                NSCursor.pop()
+                isHovering = false
+            }
+        }
+        .onDisappear {
+            if isHovering {
+                NSCursor.pop()
+                isHovering = false
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .named("network-split-space"))
+                .onChanged { value in
+                    let minRatio = Double(minPanelWidth / max(totalWidth, 1))
+                    let maxRatio = 1 - minRatio
+                    let proposed = Double(value.location.x / max(totalWidth, 1))
+                    splitRatio = min(max(proposed, minRatio), maxRatio)
+                }
+        )
     }
 }
 
@@ -889,7 +1075,7 @@ private struct HeaderListView: View {
 
     var body: some View {
         if headers.isEmpty {
-            Text("No headers")
+            Text("暂无请求头")
                 .foregroundStyle(.secondary)
         } else {
             InspectorGrid(rows: headers.keys.sorted().map { ($0, headers[$0] ?? "") })
@@ -903,7 +1089,7 @@ private struct CookieListView: View {
     var body: some View {
         let rows = parseCookies(rawCookie)
         if rows.isEmpty {
-            Text("No cookies")
+            Text("暂无 Cookie")
                 .foregroundStyle(.secondary)
         } else {
             InspectorGrid(rows: rows)
@@ -946,13 +1132,10 @@ private struct ResponseBodyPreview: View {
                     ImagePreviewSheet(image: image, task: task)
                 }
             } else {
-                Text(prettyBody(from: data))
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                BodyContentView(content: formattedBody(from: data))
             }
         } else {
-            Text("No response body")
+            Text("暂无响应体")
                 .foregroundStyle(.secondary)
         }
     }
@@ -961,17 +1144,17 @@ private struct ResponseBodyPreview: View {
         "\(task.responseContentType ?? "image") · \(ByteCountFormatter.string(fromByteCount: task.responseBodySize, countStyle: .file))"
     }
 
-    private func prettyBody(from data: Data) -> String {
+    private func formattedBody(from data: Data) -> BodyContent {
         if
             let json = try? JSONSerialization.jsonObject(with: data),
             let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
             let prettyString = String(data: prettyData, encoding: .utf8) {
-            return prettyString
+            return .json(prettyString)
         }
         if let string = String(data: data, encoding: .utf8) {
-            return string
+            return .plain(string)
         }
-        return "Binary body (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)))"
+        return .plain("二进制内容（\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))）")
     }
 }
 
@@ -980,28 +1163,619 @@ private struct RequestBodyPreview: View {
 
     var body: some View {
         if let data = task.requestBody?.data, !data.isEmpty {
-            Text(prettyBody(from: data))
-                .font(.system(.body, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            BodyContentView(content: formattedBody(from: data))
         } else {
-            Text("No request body")
+            Text("暂无请求体")
                 .foregroundStyle(.secondary)
         }
     }
 
-    private func prettyBody(from data: Data) -> String {
+    private func formattedBody(from data: Data) -> BodyContent {
         if
             let json = try? JSONSerialization.jsonObject(with: data),
             let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
             let prettyString = String(data: prettyData, encoding: .utf8) {
-            return prettyString
+            return .json(prettyString)
         }
         if let string = String(data: data, encoding: .utf8) {
-            return string
+            return .plain(string)
         }
-        return "Binary body (\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)))"
+        return .plain("二进制内容（\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))）")
     }
+}
+
+private enum BodyContent {
+    case json(String)
+    case plain(String)
+
+    var rawValue: String {
+        switch self {
+        case .json(let value), .plain(let value):
+            return value
+        }
+    }
+
+    var isJSON: Bool {
+        if case .json = self { return true }
+        return false
+    }
+}
+
+private struct BodyContentView: View {
+    let content: BodyContent
+
+    var body: some View {
+        switch content {
+        case .json(let source):
+            EditorCodeView(text: source, attributedText: makeHighlightedJSON(source))
+        case .plain(let text):
+            EditorCodeView(text: text, attributedText: nil)
+        }
+    }
+}
+
+private struct EditorCodeView: View {
+    let text: String
+    let attributedText: AttributedString?
+    @State private var collapsedBlockIDs: Set<Int> = []
+
+    private var renderedJSON: RenderedJSON {
+        renderJSONText(from: text, blocks: makeJSONFoldBlocks(from: text), collapsedBlockIDs: collapsedBlockIDs)
+    }
+
+    private var displayedText: String { renderedJSON.text }
+
+    private var displayedAttributedText: AttributedString? {
+        guard attributedText != nil else { return nil }
+        return makeHighlightedJSON(displayedText)
+    }
+
+    private var lineCount: Int {
+        max(displayedText.components(separatedBy: .newlines).count, 1)
+    }
+
+    private var contentHeight: CGFloat {
+        CGFloat(lineCount) * codeEditorLineHeight + 24
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("JSON")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                if attributedText != nil {
+                    Button("展开全部") {
+                        collapsedBlockIDs.removeAll()
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(inspectorChromeBackground)
+
+            Divider()
+
+            ScrollView(.vertical, showsIndicators: true) {
+                HStack(alignment: .top, spacing: 0) {
+                    LineNumberGutterView(
+                        lineCount: lineCount,
+                        visibleBlocks: renderedJSON.visibleBlocks,
+                        onToggleFold: toggleFold(for:)
+                    )
+                        .frame(width: 72, height: contentHeight, alignment: .top)
+
+                    Divider()
+
+                    JSONSourceTextView(text: displayedText, attributedText: displayedAttributedText, contentHeight: contentHeight)
+                        .frame(maxWidth: .infinity, minHeight: contentHeight, maxHeight: contentHeight, alignment: .leading)
+                }
+                .background(inspectorCardBackground)
+            }
+            .background(inspectorCardBackground)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(inspectorBorderColor, lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, minHeight: 240, alignment: .leading)
+    }
+
+    private func toggleFold(for blockID: Int) {
+        if collapsedBlockIDs.contains(blockID) {
+            collapsedBlockIDs.remove(blockID)
+        } else {
+            collapsedBlockIDs.insert(blockID)
+        }
+    }
+}
+
+private struct JSONSourceTextView: NSViewRepresentable {
+    let text: String
+    let attributedText: AttributedString?
+    let contentHeight: CGFloat
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = HorizontalOnlyScrollView()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.verticalScrollElasticity = .none
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(containerSize: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = false
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+
+        let textView = BracketSelectableTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 400), textContainer: textContainer)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.isVerticallyResizable = false
+        textView.isHorizontallyResizable = true
+        textView.minSize = NSSize(width: 0, height: contentHeight)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.backgroundColor = NSColor.textBackgroundColor
+        textView.drawsBackground = true
+        textView.textContainerInset = NSSize(width: codeEditorTextInset, height: 12)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = false
+        textView.font = codeEditorFont
+        textView.string = text
+        textView.setAttributedString(makeSourceAttributedString(text, attributedText: attributedText))
+        textView.frame = NSRect(x: 0, y: 0, width: 800, height: contentHeight)
+
+        scrollView.documentView = textView
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? BracketSelectableTextView else { return }
+        textView.string = text
+        textView.setAttributedString(makeSourceAttributedString(text, attributedText: attributedText))
+        textView.frame.size.height = contentHeight
+        textView.minSize.height = contentHeight
+    }
+}
+
+private final class HorizontalOnlyScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        let absX = abs(event.scrollingDeltaX)
+        let absY = abs(event.scrollingDeltaY)
+
+        if absY > absX {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+
+        super.scrollWheel(with: event)
+    }
+}
+
+private struct LineNumberGutterView: View {
+    let lineCount: Int
+    let visibleBlocks: [VisibleFoldBlock]
+    let onToggleFold: (Int) -> Void
+
+    private let rowHeight: CGFloat = codeEditorLineHeight
+
+    private var blocksByLine: [Int: VisibleFoldBlock] {
+        Dictionary(uniqueKeysWithValues: visibleBlocks.map { ($0.displayedStartLine, $0) })
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .trailing, spacing: 0) {
+            ForEach(1...lineCount, id: \.self) { line in
+                HStack(spacing: 6) {
+                    if let visibleBlock = blocksByLine[line] {
+                        Button {
+                            onToggleFold(visibleBlock.block.id)
+                        } label: {
+                            Image(systemName: visibleBlock.isCollapsed ? "chevron.right" : "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 10, height: 10)
+                                .frame(width: 22, height: rowHeight)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: 22, alignment: .center)
+                    } else {
+                        Color.clear.frame(width: 22, height: rowHeight)
+                    }
+
+                    Text("\(line)")
+                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .frame(maxWidth: .infinity, minHeight: rowHeight, maxHeight: rowHeight, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 12)
+        .background(inspectorCardBackground)
+    }
+}
+
+private final class BracketSelectableTextView: NSTextView {
+    private var bracketPairs: [Int: Int] = [:]
+    private var highlightedBracketRanges: [NSRange] = []
+    private let bracketHighlightColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.28)
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        setupSelectionObserver()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupSelectionObserver()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2,
+           let range = selectedBracketContentsRange(for: event) {
+            setSelectedRange(range)
+            updateBracketHighlight()
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    func setAttributedString(_ attributedString: NSAttributedString) {
+        textStorage?.setAttributedString(attributedString)
+        bracketPairs = makeBracketPairs(from: attributedString.string)
+        updateBracketHighlight()
+    }
+
+    private func selectedBracketContentsRange(for event: NSEvent) -> NSRange? {
+        let point = convert(event.locationInWindow, from: nil)
+        var index = characterIndexForInsertion(at: point)
+        let string = (self.string as NSString)
+        guard string.length > 0 else { return nil }
+
+        if index >= string.length { index = max(string.length - 1, 0) }
+
+        let current = Character(UnicodeScalar(string.character(at: index)) ?? " ")
+        if let close = bracketPairs[index], isOpeningBracket(current) {
+            return NSRange(location: index, length: max(close - index + 1, 0))
+        }
+        if let open = bracketPairs[index], isClosingBracket(current) {
+            return NSRange(location: open, length: max(index - open + 1, 0))
+        }
+
+        if index > 0 {
+            let previousIndex = index - 1
+            let previous = Character(UnicodeScalar(string.character(at: previousIndex)) ?? " ")
+            if let close = bracketPairs[previousIndex], isOpeningBracket(previous) {
+                return NSRange(location: previousIndex, length: max(close - previousIndex + 1, 0))
+            }
+            if let open = bracketPairs[previousIndex], isClosingBracket(previous) {
+                return NSRange(location: open, length: max(previousIndex - open + 1, 0))
+            }
+        }
+
+        return nil
+    }
+
+    private func updateBracketHighlight() {
+        guard let layoutManager else { return }
+
+        for range in highlightedBracketRanges {
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+        }
+        highlightedBracketRanges.removeAll()
+
+        guard let ranges = matchingBracketRangesForCurrentInsertionPoint() else { return }
+        for range in ranges {
+            layoutManager.addTemporaryAttribute(.backgroundColor, value: bracketHighlightColor, forCharacterRange: range)
+            layoutManager.addTemporaryAttribute(.foregroundColor, value: NSColor.labelColor, forCharacterRange: range)
+        }
+        highlightedBracketRanges = ranges
+    }
+
+    private func matchingBracketRangesForCurrentInsertionPoint() -> [NSRange]? {
+        let string = self.string as NSString
+        guard string.length > 0 else { return nil }
+
+        let caret = selectedRange().location
+        let candidates = [caret, max(caret - 1, 0)]
+
+        for candidate in candidates where candidate < string.length {
+            let char = Character(UnicodeScalar(string.character(at: candidate)) ?? " ")
+
+            if isOpeningBracket(char), let close = bracketPairs[candidate] {
+                return [NSRange(location: candidate, length: 1), NSRange(location: close, length: 1)]
+            }
+
+            if isClosingBracket(char), let open = bracketPairs[candidate] {
+                return [NSRange(location: open, length: 1), NSRange(location: candidate, length: 1)]
+            }
+        }
+
+        return nil
+    }
+
+    private func setupSelectionObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSTextView.didChangeSelectionNotification,
+            object: self,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateBracketHighlight()
+        }
+    }
+}
+
+private func makeSourceAttributedString(_ text: String, attributedText: AttributedString?) -> NSAttributedString {
+    let paragraphStyle = NSMutableParagraphStyle()
+    paragraphStyle.minimumLineHeight = codeEditorLineHeight
+    paragraphStyle.maximumLineHeight = codeEditorLineHeight
+
+    if let attributedText {
+        let mutable = NSMutableAttributedString(attributedText)
+        mutable.addAttribute(.paragraphStyle, value: paragraphStyle, range: NSRange(location: 0, length: mutable.length))
+        mutable.addAttribute(.font, value: codeEditorFont, range: NSRange(location: 0, length: mutable.length))
+        return mutable
+    }
+    return NSAttributedString(string: text, attributes: [
+        .foregroundColor: NSColor.labelColor,
+        .font: codeEditorFont,
+        .paragraphStyle: paragraphStyle
+    ])
+}
+
+private func makeBracketPairs(from string: String) -> [Int: Int] {
+    let nsString = string as NSString
+    var stack: [(Character, Int)] = []
+    var pairs: [Int: Int] = [:]
+    var isInsideString = false
+    var isEscaped = false
+
+    for index in 0..<nsString.length {
+        let char = Character(UnicodeScalar(nsString.character(at: index)) ?? " ")
+
+        if isInsideString {
+            if isEscaped {
+                isEscaped = false
+            } else if char == "\\" {
+                isEscaped = true
+            } else if char == "\"" {
+                isInsideString = false
+            }
+            continue
+        }
+
+        if char == "\"" {
+            isInsideString = true
+            continue
+        }
+
+        if isOpeningBracket(char) {
+            stack.append((char, index))
+            continue
+        }
+
+        if isClosingBracket(char),
+           let last = stack.last,
+           bracketsMatch(open: last.0, close: char) {
+            stack.removeLast()
+            pairs[last.1] = index
+            pairs[index] = last.1
+        }
+    }
+
+    return pairs
+}
+
+private func isOpeningBracket(_ char: Character) -> Bool {
+    char == "{" || char == "[" || char == "("
+}
+
+private func isClosingBracket(_ char: Character) -> Bool {
+    char == "}" || char == "]" || char == ")"
+}
+
+private func bracketsMatch(open: Character, close: Character) -> Bool {
+    (open == "{" && close == "}") ||
+    (open == "[" && close == "]") ||
+    (open == "(" && close == ")")
+}
+
+private struct JSONFoldBlock {
+    let openChar: Character
+    let closeChar: Character
+    let openIndex: Int
+    let closeIndex: Int
+    let depth: Int
+
+    let startLine: Int
+    let endLine: Int
+    let leadingSpaces: Int
+
+    var id: Int { openIndex }
+
+    var title: String {
+        "L\(startLine) \(openChar)…\(closeChar)"
+    }
+}
+
+private struct VisibleFoldBlock: Identifiable {
+    let block: JSONFoldBlock
+    let isCollapsed: Bool
+    let displayedStartLine: Int
+
+    var id: Int { block.id }
+}
+
+private struct RenderedJSON {
+    let text: String
+    let visibleBlocks: [VisibleFoldBlock]
+
+    var lineCount: Int {
+        max(text.components(separatedBy: .newlines).count, 1)
+    }
+}
+
+private func renderJSONText(from string: String, blocks: [JSONFoldBlock], collapsedBlockIDs: Set<Int>) -> RenderedJSON {
+    guard !blocks.isEmpty else {
+        return RenderedJSON(text: string, visibleBlocks: [])
+    }
+
+    let nsString = string as NSString
+    let blocksByOpenIndex = Dictionary(uniqueKeysWithValues: blocks.map { ($0.openIndex, $0) })
+    var visibleBlocks: [VisibleFoldBlock] = []
+    var result = ""
+    var index = 0
+    var displayedLine = 1
+
+    while index < nsString.length {
+        if let block = blocksByOpenIndex[index] {
+            let isCollapsed = collapsedBlockIDs.contains(block.id)
+            visibleBlocks.append(VisibleFoldBlock(block: block, isCollapsed: isCollapsed, displayedStartLine: displayedLine))
+
+            if isCollapsed {
+                result += String(block.openChar) + "…" + String(block.closeChar)
+                index = block.closeIndex + 1
+                continue
+            }
+        }
+
+        let char = Character(UnicodeScalar(nsString.character(at: index)) ?? " ")
+        result.append(char)
+        if char == "\n" {
+            displayedLine += 1
+        }
+        index += 1
+    }
+
+    return RenderedJSON(text: result, visibleBlocks: visibleBlocks)
+}
+
+private func makeJSONFoldBlocks(from string: String) -> [JSONFoldBlock] {
+    let nsString = string as NSString
+    var stack: [(char: Character, index: Int, depth: Int)] = []
+    var blocks: [JSONFoldBlock] = []
+    var isInsideString = false
+    var isEscaped = false
+    var currentLine = 1
+    var startLines: [Int: Int] = [:]
+
+    for index in 0..<nsString.length {
+        let char = Character(UnicodeScalar(nsString.character(at: index)) ?? " ")
+
+        if isInsideString {
+            if isEscaped {
+                isEscaped = false
+            } else if char == "\\" {
+                isEscaped = true
+            } else if char == "\"" {
+                isInsideString = false
+            }
+            continue
+        }
+
+        if char == "\"" {
+            isInsideString = true
+            continue
+        }
+
+        if isOpeningBracket(char) {
+            stack.append((char, index, stack.count))
+            startLines[index] = currentLine
+            continue
+        }
+
+        if isClosingBracket(char), let last = stack.last, bracketsMatch(open: last.char, close: char) {
+            stack.removeLast()
+            let startLine = startLines[last.index] ?? currentLine
+            let endLine = currentLine
+            if endLine > startLine {
+                blocks.append(JSONFoldBlock(openChar: last.char, closeChar: char, openIndex: last.index, closeIndex: index, depth: last.depth, startLine: startLine, endLine: endLine, leadingSpaces: leadingWhitespaceCount(in: nsString, at: last.index)))
+            }
+        }
+
+        if char == "\n" {
+            currentLine += 1
+        }
+    }
+
+    return blocks.sorted { $0.openIndex < $1.openIndex }
+}
+
+private func leadingWhitespaceCount(in string: NSString, at index: Int) -> Int {
+    var lineStart = index
+    while lineStart > 0 {
+        let previous = Character(UnicodeScalar(string.character(at: lineStart - 1)) ?? " ")
+        if previous == "\n" { break }
+        lineStart -= 1
+    }
+
+    var count = 0
+    var cursor = lineStart
+    while cursor < string.length {
+        let char = Character(UnicodeScalar(string.character(at: cursor)) ?? " ")
+        if char == " " {
+            count += 1
+            cursor += 1
+            continue
+        }
+        break
+    }
+
+    return count
+}
+
+private func makeHighlightedJSON(_ string: String) -> AttributedString {
+    let nsString = string as NSString
+    let fullRange = NSRange(location: 0, length: nsString.length)
+    let paragraphStyle = NSMutableParagraphStyle()
+    paragraphStyle.minimumLineHeight = codeEditorLineHeight
+    paragraphStyle.maximumLineHeight = codeEditorLineHeight
+
+    let attributed = NSMutableAttributedString(string: string, attributes: [
+        .foregroundColor: NSColor.labelColor,
+        .font: codeEditorFont,
+        .paragraphStyle: paragraphStyle
+    ])
+
+    let patterns: [(String, NSColor)] = [
+        (#"\"(?:\\.|[^\"\\])*\"\s*:(?=\s)"#, NSColor.systemRed),
+        (#"(?<=:\s)\"(?:\\.|[^\"\\])*\""#, NSColor.systemBlue),
+        (#"\b-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?\b"#, NSColor.systemGreen),
+        (#"\btrue\b|\bfalse\b"#, NSColor.systemPurple),
+        (#"\bnull\b"#, NSColor.systemOrange)
+    ]
+
+    for (pattern, color) in patterns {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+        regex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
+            guard let match else { return }
+            attributed.addAttribute(.foregroundColor, value: color, range: match.range)
+        }
+    }
+
+    return AttributedString(attributed)
 }
 
 private func resolvedMethod(_ task: NetworkTaskEntity, request: NetworkRequestEntity? = nil) -> String {
@@ -1016,7 +1790,7 @@ private struct ImagePreviewSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(task.url ?? "Image Preview")
+                Text(task.url ?? "图片预览")
                     .font(.headline)
                     .lineLimit(1)
                 Spacer()
@@ -1041,13 +1815,13 @@ private struct ImagePreviewSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(URL(string: task.url ?? "")?.lastPathComponent ?? "Image")
+                    Text(URL(string: task.url ?? "")?.lastPathComponent ?? "图片")
                         .font(.headline)
                     InspectorGrid(rows: [
-                        ("Type", task.responseContentType ?? "-"),
-                        ("Size", ByteCountFormatter.string(fromByteCount: task.responseBodySize, countStyle: .file)),
-                        ("Resolution", "\(Int(image.size.width)) × \(Int(image.size.height)) px"),
-                        ("Source", task.url ?? "-")
+                        ("类型", task.responseContentType ?? "-"),
+                        ("大小", ByteCountFormatter.string(fromByteCount: task.responseBodySize, countStyle: .file)),
+                        ("分辨率", "\(Int(image.size.width)) × \(Int(image.size.height)) px"),
+                        ("来源", task.url ?? "-")
                     ])
                     Spacer()
                 }
@@ -1062,6 +1836,10 @@ private struct ImagePreviewSheet: View {
 private func bytes(_ value: Int64) -> String {
     guard value > 0 else { return "-" }
     return ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+}
+
+private func localizedHTTPStatusText(for code: Int) -> String {
+    localizedHTTPStatusDescriptions[code] ?? HTTPURLResponse.localizedString(forStatusCode: code)
 }
 
 private func cachePolicyText(_ value: URLRequest.CachePolicy?) -> String {
