@@ -14,7 +14,7 @@ struct SettingsView: View {
     @AppStorage("maxLogEntries") private var maxLogEntries = 1000
     @AppStorage("enableJSONFilter") private var enableJSONFilter = true
     @AppStorage("showNetworkMetrics") private var showNetworkMetrics = true
-    @AppStorage("darkMode") private var darkMode = false
+    @AppStorage("appearanceMode") private var appearanceMode = AppearanceMode.system.rawValue
     
     var body: some View {
         VStack(spacing: 0) {
@@ -57,7 +57,12 @@ struct SettingsView: View {
                 }
                 
                 Section("外观") {
-                    Toggle("深色模式", isOn: $darkMode)
+                    Picker("主题模式", selection: $appearanceMode) {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                 }
                 
                 Section("存储") {

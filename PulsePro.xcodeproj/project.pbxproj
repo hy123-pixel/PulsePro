@@ -22,7 +22,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		6116CF7E2F6A39850096A1EA /* PulsePro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PulsePro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6116CF802F6A3DA60096A1EA /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		614E12CB2F6414BE0044D817 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		614E12CC2F6414BE0044D817 /* PulsePro.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PulsePro.entitlements; sourceTree = "<group>"; };
@@ -34,6 +33,7 @@
 		614E12D92F6414BE0044D817 /* NetworkListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkListView.swift; sourceTree = "<group>"; };
 		614E12DA2F6414BE0044D817 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		614E12DB2F6414BE0044D817 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		6116CF7E2F6A39850096A1EA /* PulsePro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PulsePro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A9A10002F6420AA0044D817 /* PulseProRemoteServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PulseProRemoteServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -306,7 +306,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Pulse Pro";
+				INFOPLIST_KEY_CFBundleDisplayName = PulsePro;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -332,7 +332,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Pulse Pro";
+				INFOPLIST_KEY_CFBundleDisplayName = PulsePro;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
