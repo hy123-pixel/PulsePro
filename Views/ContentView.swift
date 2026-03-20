@@ -357,6 +357,10 @@ struct RemoteStatusPopover: View {
                 Text("异常: \(error)")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if !controller.remoteServer.recentEvents.isEmpty {
